@@ -1,6 +1,8 @@
 # Fundonor 基金助手
 
-![Logo](public/icon.png)
+<p align="center">
+  <img src="src/assets/icon-outline.png" alt="Logo" width="128" />
+</p>
 
 一款简洁、高效的桌面端实时基金估值与持仓监控工具。基于 Electron 与 React 构建，数据本地存储，安全无忧。
 
