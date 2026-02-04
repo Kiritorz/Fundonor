@@ -285,8 +285,8 @@ const AnimatedNumber = ({ value, className = '', formatFn = (v) => v }) => {
   const chars = formatted.split('');
 
   return (
-    // 使用 tabular-nums 确保数字等宽，防止抖动; inline-flex 保持行内布局
-    <span className={`inline-flex font-money ${className}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
+    // 使用 tabular-nums 确保数字等宽，防止抖动; inline-flex 保持行内布局; animate-fade-in for initial mount
+    <span className={`inline-flex font-money ${className} animate-fade-in`} style={{ fontVariantNumeric: 'tabular-nums' }}>
       {chars.map((c, i) => (
         // 使用 index 作为 key，让相同位置的字符进行对比
         // 这样 5000 -> 5010，只有 index=2 的 '0'->'1' 会触发 RollingDigit 的 useEffect
@@ -572,6 +572,9 @@ export default function App() {
   // 确认弹窗状态
   const [confirmState, setConfirmState] = useState({ isOpen: false, title: '', msg: '', onConfirm: () => { } });
 
+  // [New] 自选列表右键菜单状态
+  const [contextMenu, setContextMenu] = useState(null); // { x: 0, y: 0, fund: null }
+
   // --- 派生状态 ---
   const t = useCallback((key) => LANGUAGES[lang][key] || key, [lang]);
 
@@ -731,27 +734,102 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleEsc);
   }, [activeFundId, showAddModal, showEditModal, showPortfolioModal, confirmState.isOpen]);
 
+  // [New] 点击页面其他地方关闭右键菜单
+  useEffect(() => {
+    const handleClick = () => setContextMenu(null);
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, []);
+
   // --- 数据获取方法 ---
   const fetchFundData = useCallback(async (code) => {
     const cleanCode = code.trim().padStart(6, '0');
+    let data = null;
+
+    // 1. 尝试获取实时估值 API
     try {
       const res = await fetch(`https://fundgz.1234567.com.cn/js/${cleanCode}.js?rt=${Date.now()}`);
       const text = await res.text();
       const match = text.match(/jsonpgz\((.*)\)/);
       if (match) {
         const json = JSON.parse(match[1]);
-        return { code: json.fundcode, name: json.name, dwjz: parseFloat(json.dwjz), gsz: parseFloat(json.gsz), gszzl: parseFloat(json.gszzl), gztime: json.gztime, isReal: json.jzrq === json.gztime?.split(' ')[0], jzrq: json.jzrq };
+        data = {
+          code: json.fundcode,
+          name: json.name,
+          dwjz: parseFloat(json.dwjz),
+          gsz: parseFloat(json.gsz),
+          gszzl: parseFloat(json.gszzl),
+          gztime: json.gztime,
+          isReal: json.jzrq === json.gztime?.split(' ')[0],
+          jzrq: json.jzrq
+        };
       }
     } catch (e) { }
-    try {
-      const res = await fetch(`https://fundmobapi.1234567.com.cn/FundMApi/FundVarietieValuationDetail.ashx?FCODE=${cleanCode}&deviceid=Wap&plat=Wap&product=EFund&version=6.0.0`);
-      const json = await res.json();
-      if (json && json.Datas) {
-        const d = json.Datas;
-        return { code: cleanCode, name: d.SHORTNAME, dwjz: parseFloat(d.DWJZ), gsz: parseFloat(d.GSZ), gszzl: parseFloat(d.GSZZL), gztime: d.GZTIME, isReal: d.JZRQ === d.GZTIME?.split(' ')[0], jzrq: d.JZRQ };
+
+    if (!data) {
+      try {
+        const res = await fetch(`https://fundmobapi.1234567.com.cn/FundMApi/FundVarietieValuationDetail.ashx?FCODE=${cleanCode}&deviceid=Wap&plat=Wap&product=EFund&version=6.0.0`);
+        const json = await res.json();
+        if (json && json.Datas) {
+          const d = json.Datas;
+          data = {
+            code: cleanCode,
+            name: d.SHORTNAME,
+            dwjz: parseFloat(d.DWJZ),
+            gsz: parseFloat(d.GSZ),
+            gszzl: parseFloat(d.GSZZL),
+            gztime: d.GZTIME,
+            isReal: d.JZRQ === d.GZTIME?.split(' ')[0],
+            jzrq: d.JZRQ
+          };
+        }
+      } catch (e) { }
+    }
+
+    // 2. 如果估值 API 没有确认是真实值，但时间已晚（收盘后），尝试检查历史数据（近10日）看是否有今日的真实净值
+    if (data) {
+      // 简单的判断：如果估值时间已经是 15:00 或更晚，或者 API 里的日期不对，尝试校验
+      // 注意：这里我们做个宽松检查，只要拿到了 data 就去检查 pingzhongdata，确保数据准确（特别是收盘后）
+      // 为减少请求，可以限制只有在收盘后才检查 (gztime 包含 15:00)
+      // 或者简单点：如果 !isReal，就去检查一下
+      const isClosed = data.gztime && (data.gztime.includes('15:00') || data.gztime.includes('15:30') || parseInt(data.gztime.split(' ')[1]?.split(':')[0]) >= 15);
+
+      if (isClosed && !data.isReal) {
+        try {
+          const res = await fetch(`https://fund.eastmoney.com/pingzhongdata/${cleanCode}.js?v=${Date.now()}`);
+          const text = await res.text();
+          const match = text.match(/Data_netWorthTrend\s*=\s*(\[[\s\S]*?\]);/);
+
+          if (match) {
+            const list = JSON.parse(match[1]);
+            if (list && list.length > 0) {
+              const last = list[list.length - 1];
+              const lastDate = new Date(last.x);
+              const lastDateStr = `${lastDate.getFullYear()}-${String(lastDate.getMonth() + 1).padStart(2, '0')}-${String(lastDate.getDate()).padStart(2, '0')}`;
+
+              // 获取 data.gztime 的日期部分，或者当前日期
+              // 这里我们假设如果 pingzhongdata 的最后一个日期比 data.jzrq 更晚，或者等于 data.gztime 的日期，那就是最新的
+              // 通常 data.gztime 是 "2023-10-27 15:00"，我们看 pingzhongdata 是否有 2023-10-27
+
+              const gzDateStr = data.gztime.split(' ')[0]; // "2023-10-27"
+
+              if (lastDateStr === gzDateStr) {
+                // 找到了今天的真实数据的记录
+                data.isReal = true;
+                data.dwjz = last.y;          // 真实净值
+                data.gszzl = last.equityReturn; // 真实涨跌幅
+                data.gsz = last.y;           // 更新估算值为真实值，方便因为 gsz 计算逻辑
+                data.jzrq = lastDateStr;     // 更新净值日期
+              }
+            }
+          }
+        } catch (e) {
+          // ignore error
+        }
       }
-    } catch (e) { }
-    return null;
+    }
+
+    return data;
   }, []);
 
   const updateRealtime = useCallback(async () => {
@@ -1179,12 +1257,12 @@ export default function App() {
                       {currentViewHoldings.length > 0 && (
                         <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md backdrop-blur-md border border-white/10 bg-black/20 text-white flex items-center gap-1`}>
                           {stats.todayPnL >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                          <AnimatedNumber value={stats.totalYieldRate} formatFn={formatPercent} />
+                          <AnimatedNumber key={activePortfolioId} value={stats.totalYieldRate} formatFn={formatPercent} />
                         </div>
                       )}
                     </div>
                     <div className="text-4xl font-black text-white tracking-tight drop-shadow-xl">
-                      <AnimatedNumber value={stats.todayPnL} formatFn={(v) => (v >= 0 ? '+' : '') + formatMoney(v)} />
+                      <AnimatedNumber key={activePortfolioId} value={stats.todayPnL} formatFn={(v) => (v >= 0 ? '+' : '') + formatMoney(v)} />
                     </div>
                   </div>
 
@@ -1192,12 +1270,12 @@ export default function App() {
                     <div>
                       <p className="text-[9px] font-black text-white/50 uppercase mb-0.5 tracking-widest">{t('totalValue')}</p>
                       <p className="text-xl font-black text-white">
-                        <AnimatedNumber value={stats.totalValue} formatFn={formatMoney} />
+                        <AnimatedNumber key={activePortfolioId} value={stats.totalValue} formatFn={formatMoney} />
                       </p>
                     </div>
                     <div>
                       <p className="text-[9px] font-black text-white/50 uppercase mb-0.5 tracking-widest">{t('principal')}</p>
-                      <p className="text-xl font-black text-white">{formatMoney(stats.totalPrincipal)}</p>
+                      <p className="text-xl font-black text-white"><AnimatedNumber key={activePortfolioId} value={stats.totalPrincipal} formatFn={formatMoney} /></p>
                     </div>
                   </div>
                 </div>
@@ -1215,12 +1293,15 @@ export default function App() {
                     {currentViewHoldings.length === 0 ? <div className="p-12 text-center text-slate-600 italic text-xs">{t('noData')}</div> :
                       currentViewHoldings.map((fund) => {
                         const live = realtimeData[fund.code];
+                        // [Safe Access] Ensure live data exists before accessing properties
+                        const liveDwjz = live?.dwjz || 1;
                         const isUp = (live?.gszzl || 0) >= 0;
-                        const actualShares = parseFloat(fund.shares) || (fund.investment / live.dwjz);
+                        const actualShares = parseFloat(fund.shares) || (fund.investment / liveDwjz);
 
                         // [Fix] 列表中的数据也需要应用同样的逻辑
                         const shouldCalcToday = fund.calcToday !== false;
-                        const currentPrice = (live?.isReal || !shouldCalcToday) ? live.dwjz : (live?.gsz || 1);
+                        // [Safe Access] Handle missing live data
+                        const currentPrice = (live && (live.isReal || !shouldCalcToday)) ? liveDwjz : (live?.gsz || 1);
 
                         const currentVal = actualShares * currentPrice;
                         const totalPnl = currentVal - fund.investment;
@@ -1230,14 +1311,23 @@ export default function App() {
                         const todayProfit = shouldCalcToday ? currentVal * ((live?.gszzl || 0) / (100 + (live?.gszzl || 0))) : 0;
 
                         return (
-                          <div key={fund.id} onClick={() => setActiveFundId(fund.id)} className="px-4 py-1.5 hover:bg-white/[0.04] rounded-xl transition-all cursor-pointer group font-money border border-transparent hover:border-white/5">
+                          <div
+                            key={fund.id}
+                            onClick={() => setActiveFundId(fund.id)}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setContextMenu({ x: e.pageX, y: e.pageY, fund: fund, type: 'portfolio' });
+                            }}
+                            className="px-4 py-1.5 hover:bg-white/[0.04] rounded-xl transition-all cursor-pointer group font-money border border-transparent hover:border-white/5"
+                          >
                             {/* 4列 Grid 布局: 名称/金额 | 涨幅 | 当日收益 | 总收益/率 */}
                             <div className="grid grid-cols-4 items-center gap-2">
                               {/* Col 1: Name & Amount */}
                               <div className="min-w-0 translate-y-0.5">
                                 <div className="flex items-center gap-2">
                                   <h4 className="font text-xs text-slate-300 group-hover:text-white transition-colors truncate">{fund.name}</h4>
-                                  {live?.isReal && <span className="text-[7px] bg-white/10 text-slate-300 px-1 py-px rounded uppercase font-bold border border-white/10">R</span>}
+                                  {live?.isReal && <span className="text-[7px] bg-blue-500/20 text-blue-400 px-1 py-px rounded uppercase font-bold border border-blue-500/30">R</span>}
                                   {!shouldCalcToday && <span className="text-[7px] bg-white/10 text-slate-500 px-1 py-px rounded uppercase font-bold border border-white/10">T+1</span>}
                                 </div>
                                 <p className="text-[11px] text-slate-500 font-mono tracking-wider uppercase opacity-60">{formatMoney(currentVal)}</p>
@@ -1247,7 +1337,9 @@ export default function App() {
                               <div className="text-center">
                                 <span className={`text-base font-black ${isUp ? COLORS.up : COLORS.down}`}>{formatPercent(live?.gszzl)}</span>
                                 {/* 增加估算涨幅小字 */}
-                                <p className="text-[10px] text-slate-600">{t('estimate')}</p>
+                                <p className={`text-[10px] ${live?.isReal ? 'text-blue-400' : 'text-slate-600'}`}>
+                                  {live?.isReal ? (lang === 'en' ? 'Actual' : '真实涨跌') : t('estimate')}
+                                </p>
                               </div>
 
                               {/* Col 3: Today Profit */}
@@ -1369,7 +1461,9 @@ export default function App() {
                             <AnimatedNumber value={live?.gszzl || 0} formatFn={formatPercent} />
                           </span>
                           <div className="flex flex-col">
-                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">{t('estimate')}</span>
+                            <span className={`text-[9px] font-black uppercase tracking-widest leading-none mb-1 ${live?.isReal ? 'text-blue-400' : 'text-slate-500'}`}>
+                              {live?.isReal ? (lang === 'en' ? 'Actual' : '真实涨跌') : t('estimate')}
+                            </span>
                             <span className="text-[10px] text-slate-600 font-mono">{live?.gztime}</span>
                           </div>
                         </div>
@@ -1630,6 +1724,11 @@ export default function App() {
                             onDragStart={(e) => {
                               e.dataTransfer.setData('text/plain', item.code);
                             }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setContextMenu({ x: e.pageX, y: e.pageY, fund: item, type: 'watchlist' });
+                            }}
                             className="bg-[#111] border border-white/10 rounded-2xl p-4 relative group hover:border-white/30 transition-all flex flex-col h-full cursor-move select-none"
                           >
                             <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity z-10 flex gap-2">
@@ -1665,14 +1764,19 @@ export default function App() {
 
                             <div className="flex items-end justify-between font-money mt-auto">
                               <div>
-                                <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-0.5">实时估值</div>
+                                <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-0.5">{t('currentPrice')}</div>
                                 <div className="text-xl font-bold text-slate-300">
-                                  <AnimatedNumber value={r.gsz} />
+                                  <AnimatedNumber value={r.dwjz || r.gsz} />
                                 </div>
                               </div>
-                              <div className={`${colorClass} font-black text-3xl flex items-center gap-1`}>
-                                {isUp ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                                <AnimatedNumber value={rate} formatFn={v => (v > 0 ? '+' : '') + v + '%'} />
+                              <div className="flex flex-col items-end">
+                                <div className={`${colorClass} font-black text-3xl flex items-center gap-1`}>
+                                  {isUp ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+                                  <AnimatedNumber value={rate} formatFn={v => (v > 0 ? '+' : '') + v + '%'} />
+                                </div>
+                                <span className={`text-[9px] font-black uppercase tracking-wider mt-1 ${r?.isReal ? 'text-blue-400' : 'text-slate-600'}`}>
+                                  {r?.isReal ? (lang === 'en' ? 'ACTUAL' : '真实涨跌') : (lang === 'en' ? 'ESTIMATE' : '实时估值')}
+                                </span>
                               </div>
                             </div>
 
@@ -1695,6 +1799,73 @@ export default function App() {
 
           </div>
         </main>
+        {/* 自选基金右键菜单 */}
+        {contextMenu && (
+          <div
+            className="fixed bg-[#1e1e1e] border border-white/10 rounded-xl shadow-2xl py-1 z-[300] w-36 animate-fade-in"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {contextMenu.type === 'watchlist' && (
+              <button
+                onClick={() => {
+                  setContextMenu(null);
+                  setNewFund({ code: contextMenu.fund.code, investment: '', return: '', calcToday: true });
+                  setShowAddModal(true);
+                }}
+                className="w-full text-left px-4 py-2 hover:bg-white/10 text-xs text-white font-bold flex items-center gap-2"
+              >
+                <Plus size={14} />
+                <span>添加到持仓</span>
+              </button>
+            )}
+
+            {contextMenu.type === 'portfolio' && (
+              <div className="py-1">
+                <div className="px-4 py-1.5 text-[10px] uppercase font-black text-slate-500 tracking-widest border-b border-white/5 mb-1 bg-black/20">
+                  移动到...
+                </div>
+                {portfolios.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={async () => {
+                      // Move logic
+                      const targetId = p.id;
+                      const fundId = contextMenu.fund.id;
+
+                      if (contextMenu.fund.portfolioId === targetId) {
+                        setContextMenu(null);
+                        return;
+                      }
+
+                      const updatedHoldings = myHoldings.map(h =>
+                        h.id === fundId ? { ...h, portfolioId: targetId } : h
+                      );
+                      setMyHoldings(updatedHoldings);
+                      setContextMenu(null);
+                      setNotification({ msg: `已移动到 "${p.name}"`, type: 'success' });
+                      setTimeout(() => setNotification(null), 2000);
+
+                      if (window.require) {
+                        try {
+                          // Explicitly save immediately
+                          await window.require('electron').ipcRenderer.invoke('db-save-all-holdings', updatedHoldings);
+                        } catch (e) { }
+                      }
+                    }}
+                    disabled={contextMenu.fund.portfolioId === p.id}
+                    className={`w-full text-left px-4 py-2 text-xs font-bold flex items-center gap-2 transition-colors ${contextMenu.fund.portfolioId === p.id ? 'text-slate-600 cursor-default opacity-50' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}
+                  >
+                    <FolderOpen size={14} className={contextMenu.fund.portfolioId === p.id ? 'opacity-50' : ''} />
+                    <span className="truncate">{p.name}</span>
+                    {contextMenu.fund.portfolioId === p.id && <Check size={12} className="ml-auto" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* 自选板块管理弹窗 */}
         {showWatchlistGroupModal && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-6">
