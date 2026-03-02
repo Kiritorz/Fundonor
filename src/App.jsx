@@ -85,6 +85,36 @@ const LANGUAGES = {
     calcTodayProfitNote: '今日新买入建议关闭',
     closeToTray: '关闭时隐藏到托盘',
     closeToTrayNote: '保持后台运行以实时获取数据',
+    buy: '买入',
+    sell: '卖出',
+    buyingTip: '输入买入金额，系统将根据当前净值自动计算份额',
+    closed: '已收盘',
+    all: '全部',
+    move_to: '移动到...',
+    delete_group: '删除板块',
+    delete_group_msg: '确定要删除该自选板块吗？板块内的基金将不再归属任何板块。',
+    create_group: '新建自选板块',
+    rename_group: '重命名板块',
+    group_name: '板块名称',
+    add_to_watchlist: '加入自选',
+    already_in_watchlist: '已存在于自选列表',
+    added_to_watchlist: '已添加至自选',
+    buy_amount_label: '买入金额 (¥)',
+    sell_amount_label: '卖出金额 (¥)',
+    enter_amount: '请输入交易金额',
+    enable_plan: '启用定投计划',
+    period_amount: '每期金额',
+    confirm_remove: '确认移除',
+    confirm_remove_msg: '确定要移除吗？',
+    actual_change: '真实涨跌',
+    sort_default: '默认',
+    sort_asc: '涨幅↑',
+    sort_desc: '涨幅↓',
+    drag_to_add: '拖拽基金到此板块添加',
+    no_watchlist_data: '暂无自选基金',
+    add_to_portfolio: '添加到持仓',
+    moved_to: '已移动到',
+    danger_zone: '存储配置'
   },
   en: {
     portfolio: 'Portfolio',
@@ -158,6 +188,36 @@ const LANGUAGES = {
     calcTodayProfitNote: 'Turn off for new buy-ins',
     closeToTray: 'Minimize to Tray',
     closeToTrayNote: 'Keep running in background',
+    buy: 'Buy',
+    sell: 'Sell',
+    buyingTip: 'Enter investment amount, shares will be auto-calculated based on current NAV',
+    closed: 'Closed',
+    all: 'All',
+    move_to: 'Move to...',
+    delete_group: 'Delete Plate',
+    delete_group_msg: 'Are you sure? Funds in this plate will become unassigned.',
+    create_group: 'New Plate',
+    rename_group: 'Rename Plate',
+    group_name: 'Plate Name',
+    add_to_watchlist: 'Add to Watchlist',
+    already_in_watchlist: 'Already in watchlist',
+    added_to_watchlist: 'Added to watchlist',
+    buy_amount_label: 'Buy Amount (¥)',
+    sell_amount_label: 'Sell Amount (¥)',
+    enter_amount: 'Enter amount',
+    enable_plan: 'Enable Plan',
+    period_amount: 'Period Amount',
+    confirm_remove: 'Confirm Remove',
+    confirm_remove_msg: 'Are you sure you want to remove ',
+    actual_change: 'Actual',
+    sort_default: 'Default',
+    sort_asc: 'Change ↑',
+    sort_desc: 'Change ↓',
+    drag_to_add: 'Drag funds here',
+    no_watchlist_data: 'No funds in watchlist',
+    add_to_portfolio: 'Add to Portfolio',
+    moved_to: 'Moved to',
+    danger_zone: 'Danger Zone',
   }
 };
 
@@ -280,16 +340,22 @@ const RollingDigit = ({ char }) => {
 
 // --- 数字滚动动画组件 (按位独立) ---
 const AnimatedNumber = ({ value, className = '', formatFn = (v) => v }) => {
-  // 获取格式化后的字符串
-  const formatted = formatFn(value).toString();
+  // [Fix] 1. 安全处理 null/undefined
+  // 2. 如果 formatFn 需要数字，确保传入的是数字（如果是字符串则转换）
+  const safeValue = (value === null || value === undefined) ? 0 : value;
+
+  // [Fix] 在调用格式化前，尝试将 value 转换为数字（如果是纯数字字符串）
+  // 这样可以防止 "1.23".toFixed() 这样的错误
+  const numericValue = typeof safeValue === 'string' && !isNaN(parseFloat(safeValue))
+    ? parseFloat(safeValue)
+    : safeValue;
+
+  const formatted = formatFn(numericValue).toString();
   const chars = formatted.split('');
 
   return (
-    // 使用 tabular-nums 确保数字等宽，防止抖动; inline-flex 保持行内布局; animate-fade-in for initial mount
     <span className={`inline-flex font-money ${className} animate-fade-in`} style={{ fontVariantNumeric: 'tabular-nums' }}>
       {chars.map((c, i) => (
-        // 使用 index 作为 key，让相同位置的字符进行对比
-        // 这样 5000 -> 5010，只有 index=2 的 '0'->'1' 会触发 RollingDigit 的 useEffect
         <RollingDigit key={i} char={c} />
       ))}
     </span>
@@ -328,23 +394,57 @@ const CardTexture = ({ isDown }) => (
 // --- 分时走势图组件 ---
 const IntradayChart = ({ data, height = 300, loading = false }) => {
   const width = 800;
-  const paddingL = 40; const paddingR = 40; const paddingT = 20; const paddingB = 20; // Expanded padding for labels
+  const paddingL = 40; const paddingR = 40; const paddingT = 20; const paddingB = 20;
   const [hoverData, setHoverData] = useState(null);
+
+  // 计算当前时间对应的最大有效索引
+  const getCurrentMaxIndex = useCallback(() => {
+    const now = new Date();
+    const hours = now.getHours();
+    const minutes = now.getMinutes();
+    const totalMinutes = hours * 60 + minutes;
+
+    // A股交易时间：
+    // 上午 9:30 - 11:30 (索引 0-120)
+    // 午休 11:30 - 13:00
+    // 下午 13:00 - 15:00 (索引 121-240)
+
+    // 上午交易时段 (9:30 - 11:30)
+    if (totalMinutes >= 570 && totalMinutes < 690) { // 11:30 = 11*60+30 = 690
+      return totalMinutes - 570; // 索引 0-120
+    }
+
+    // 午休时段 (11:30 - 13:00)
+    if (totalMinutes >= 690 && totalMinutes < 780) { // 13:00 = 13*60 = 780
+      return 120; // 最多显示到上午收盘
+    }
+
+    // 下午交易时段 (13:00 - 15:00)
+    if (totalMinutes >= 780 && totalMinutes <= 900) { // 15:00 = 15*60 = 900
+      return 120 + (totalMinutes - 780); // 索引 121-240
+    }
+
+    // 收盘后（15:00之后）
+    return 240; // 显示全天数据
+  }, []);
 
   const chartPoints = useMemo(() => {
     const points = Array(241).fill(null);
     if (data) {
+      const maxValidIndex = getCurrentMaxIndex();
       Object.keys(data).forEach(idx => {
         const i = parseInt(idx);
-        if (i >= 0 && i <= 240) points[i] = data[idx];
+        // 只保留当前时间之前的数据
+        if (i >= 0 && i <= 240 && i <= maxValidIndex) {
+          points[i] = data[idx];
+        }
       });
     }
     return points;
-  }, [data]);
+  }, [data, getCurrentMaxIndex]);
 
   const validValues = chartPoints.filter(v => v !== null);
   const latestValue = validValues.length > 0 ? validValues[validValues.length - 1] : 0;
-  // 2. 如果当前涨幅小于零，则曲线为绿色，否则是红色
   const isUpColor = latestValue >= 0;
 
   const realMax = validValues.length > 0 ? Math.max(...validValues) : 0;
@@ -370,12 +470,11 @@ const IntradayChart = ({ data, height = 300, loading = false }) => {
   });
   const zeroY = getY(0);
 
-  // 3. 鼠标悬浮交互
   const handleMouseMove = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const chartAreaW = rect.width;
-    const scale = width / chartAreaW; // SVG to DOM Ratio
+    const scale = width / chartAreaW;
     const svgX = x * scale;
 
     if (svgX < paddingL || svgX > width - paddingR) {
@@ -389,8 +488,10 @@ const IntradayChart = ({ data, height = 300, loading = false }) => {
     if (idx < 0) idx = 0;
     if (idx > 240) idx = 240;
 
+    // 鼠标悬浮时也要检查索引是否有效
+    const maxValidIndex = getCurrentMaxIndex();
     const val = chartPoints[idx];
-    if (val !== null) {
+    if (val !== null && idx <= maxValidIndex) {
       setHoverData({ idx, val, x: getX(idx), y: getY(val) });
     } else {
       setHoverData(null);
@@ -399,8 +500,8 @@ const IntradayChart = ({ data, height = 300, loading = false }) => {
 
   const getHoverTime = (idx) => {
     let mTotal = 0;
-    if (idx <= 120) mTotal = 570 + idx; // 9:30 base
-    else mTotal = 780 + (idx - 120); // 13:00 base
+    if (idx <= 120) mTotal = 570 + idx;
+    else mTotal = 780 + (idx - 120);
     const h = Math.floor(mTotal / 60);
     const m = mTotal % 60;
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
@@ -419,32 +520,26 @@ const IntradayChart = ({ data, height = 300, loading = false }) => {
             <stop offset="100%" stopColor={isUpColor ? COLORS.strokeUp : COLORS.strokeDown} stopOpacity="0" />
           </linearGradient>
         </defs>
-        {/* Axes */}
         <line x1={paddingL} y1={paddingT} x2={paddingL} y2={height - paddingB} stroke={COLORS.axis} strokeWidth="1" opacity="0.1" />
         <line x1={paddingL} y1={height - paddingB} x2={width - paddingR} y2={height - paddingB} stroke={COLORS.axis} strokeWidth="1" opacity="0.1" />
         <line x1={paddingL} y1={zeroY} x2={width - paddingR} y2={zeroY} stroke={COLORS.axis} strokeDasharray="3" opacity="0.3" strokeWidth="1" />
 
-        {/* Scale Labels (Left) */}
         <text x={paddingL - 6} y={getY(absMax)} fill="#64748b" fontSize="10" textAnchor="end">+{absMax.toFixed(2)}%</text>
         <text x={paddingL - 6} y={zeroY + 3} fill="#64748b" fontSize="10" textAnchor="end">0.00%</text>
         <text x={paddingL - 6} y={getY(-absMax)} fill="#64748b" fontSize="10" textAnchor="end">-{absMax.toFixed(2)}%</text>
 
-        {/* 4. Min/Max Lines & Labels (Right) */}
         {!loading && validValues.length > 0 && (
           <>
-            {/* Max Line */}
             <line x1={paddingL} y1={getY(realMax)} x2={width - paddingR} y2={getY(realMax)}
               stroke={COLORS.strokeUp} strokeDasharray="2" opacity="0.4" strokeWidth="1" />
             <text x={width - paddingR + 6} y={getY(realMax) + 3} fill={COLORS.strokeUp} fontSize="10" textAnchor="start">{realMax >= 0 ? '+' : ''}{realMax.toFixed(2)}%</text>
 
-            {/* Min Line */}
             <line x1={paddingL} y1={getY(realMin)} x2={width - paddingR} y2={getY(realMin)}
               stroke={COLORS.strokeDown} strokeDasharray="2" opacity="0.4" strokeWidth="1" />
             <text x={width - paddingR + 6} y={getY(realMin) + 3} fill={COLORS.strokeDown} fontSize="10" textAnchor="start">{realMin >= 0 ? '+' : ''}{realMin.toFixed(2)}%</text>
           </>
         )}
 
-        {/* Chart Curve */}
         {pathD && !loading && (
           <>
             <path d={`${pathD} L ${endX} ${zeroY} L ${startX} ${zeroY} Z`} fill="url(#lineGrad)" />
@@ -452,7 +547,6 @@ const IntradayChart = ({ data, height = 300, loading = false }) => {
           </>
         )}
 
-        {/* 3. Hover Tooltip */}
         {hoverData && (
           <g>
             <line x1={hoverData.x} y1={paddingT} x2={hoverData.x} y2={height - paddingB} stroke="#cbd5e1" strokeWidth="1" strokeDasharray="4" opacity="0.5" />
@@ -461,13 +555,116 @@ const IntradayChart = ({ data, height = 300, loading = false }) => {
               <rect width="80" height="42" rx="6" fill="#1e293b" stroke="rgba(255,255,255,0.1)" strokeWidth="1" className="shadow-2xl" />
               <text x="40" y="16" fill="#94a3b8" fontSize="11" textAnchor="middle" fontWeight="500">{getHoverTime(hoverData.idx)}</text>
               <text x="40" y="32" fill={hoverData.val >= 0 ? COLORS.strokeUp : COLORS.strokeDown} fontSize="13" fontWeight="bold" textAnchor="middle" className="font-money">
-                {hoverData.val >= 0 ? '+' : ''}{hoverData.val.toFixed(2)}%
+                {/* [Fix] 安全调用 toFixed */}
+                {hoverData.val != null ? (hoverData.val >= 0 ? '+' : '') + hoverData.val.toFixed(2) + '%' : '--'}
               </text>
             </g>
           </g>
         )}
       </svg>
     </div>
+  );
+};
+
+// --- [New] 迷你分时走势图组件 (用于卡片，无坐标轴) ---
+const MiniIntradayChart = ({ data, isUp }) => {
+  const width = 200;
+  const height = 40;
+
+  const getCurrentMaxIndex = useCallback(() => {
+    const now = new Date();
+    const hours = now.getHours();
+    const minutes = now.getMinutes();
+    const totalMinutes = hours * 60 + minutes;
+
+    // A股交易时间：
+    // 上午 9:30 - 11:30 (索引 0-120)
+    // 午休 11:30 - 13:00
+    // 下午 13:00 - 15:00 (索引 121-240)
+
+    // 上午交易时段 (9:30 - 11:30)
+    if (totalMinutes >= 570 && totalMinutes < 690) { // 11:30 = 11*60+30 = 690
+      return totalMinutes - 570; // 索引 0-120
+    }
+
+    // 午休时段 (11:30 - 13:00)
+    if (totalMinutes >= 690 && totalMinutes < 780) { // 13:00 = 13*60 = 780
+      return 120; // 最多显示到上午收盘
+    }
+
+    // 下午交易时段 (13:00 - 15:00)
+    if (totalMinutes >= 780 && totalMinutes <= 900) { // 15:00 = 15*60 = 900
+      return 120 + (totalMinutes - 780); // 索引 121-240
+    }
+
+    // 收盘后（15:00之后）
+    return 240; // 显示全天数据
+  }, []);
+
+  const chartPoints = useMemo(() => {
+    const points = Array(241).fill(null);
+    if (data) {
+      const maxValidIndex = getCurrentMaxIndex();
+      Object.keys(data).forEach(idx => {
+        const i = parseInt(idx);
+        // 只保留当前时间之前的数据
+        if (i >= 0 && i <= 240 && i <= maxValidIndex) {
+          points[i] = data[idx];
+        }
+      });
+    }
+    return points;
+  }, [data, getCurrentMaxIndex]);
+
+  const validValues = chartPoints.filter(v => v !== null);
+
+  // 没有数据时显示虚线占位
+  if (validValues.length === 0) return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full opacity-20">
+      <line x1="0" y1={height / 2} x2={width} y2={height / 2} stroke={COLORS.axis} strokeDasharray="2" strokeWidth="1" />
+    </svg>
+  );
+
+  const realMax = Math.max(...validValues);
+  const realMin = Math.min(...validValues);
+  const absMax = Math.max(Math.abs(realMax), Math.abs(realMin), 0.1);
+  const range = (absMax * 2.2) || 1;
+  const bottom = -absMax * 1.1;
+
+  const getX = (i) => (i / 240) * width;
+  const getY = (v) => height - ((v - bottom) / range) * height;
+
+  let pathD = "";
+  let startX = null;
+  let endX = null;
+  chartPoints.forEach((val, i) => {
+    if (val !== null) {
+      const x = getX(i);
+      const y = getY(val);
+      if (startX === null) startX = x;
+      endX = x;
+      pathD += (pathD === "" ? `M ${x} ${y}` : ` L ${x} ${y}`);
+    }
+  });
+
+  const zeroY = getY(0);
+  const color = isUp ? COLORS.strokeUp : COLORS.strokeDown;
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full overflow-visible" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id={`miniGrad-${isUp}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.3" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {/* 0轴基准线 */}
+      <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke={COLORS.axis} strokeDasharray="2" opacity="0.3" strokeWidth="0.5" />
+      {/* 渐变填充 */}
+      {pathD && <path d={`${pathD} L ${endX} ${zeroY} L ${startX} ${zeroY} Z`} fill={`url(#miniGrad-${isUp})`} />}
+      {/* 走势曲线 */}
+      {pathD && <path d={pathD} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />}
+    </svg>
   );
 };
 
@@ -618,26 +815,24 @@ export default function App() {
       .filter(t => t && typeof t === 'string' && t.trim().length > 0);
 
     if (times.length > 0) {
-      // 取最新的时间作为显示
       times.sort();
-      const last = times[times.length - 1]; // "2023-10-27 15:00"
+      const last = times[times.length - 1];
       const parts = last.split(' ');
       if (parts.length >= 2) {
         const d = parts[0];
-        const t = parts[1];
+        const timePart = parts[1]; // ✅ 将 t 修改为 timePart
         const dateStr = d.substring(5);
 
-        // 只要小时 >= 15 就显示已收盘
-        const hour = parseInt(t.split(':')[0], 10);
+        const hour = parseInt(timePart.split(':')[0], 10); // ✅ 同步修改
         if (!isNaN(hour) && hour >= 15) {
-          return `${dateStr} ${lang === 'en' ? 'Closed' : '已收盘'}`;
+          // ✅ 这里的 t 此时能正确引用到外部的 useCallback 翻译函数
+          return `${dateStr} ${t('closed')}`;
         }
         return dateStr;
       }
     }
-    // 默认显示今天日期
     return new Date().toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
-  }, [realtimeData, lang]);
+  }, [realtimeData, lang, t]); // ✅ 建议将 t 加入依赖数组
 
   const activeFund = useMemo(() =>
     activeFundId ? myHoldings.find(h => h.id === activeFundId) : null
@@ -786,12 +981,8 @@ export default function App() {
       } catch (e) { }
     }
 
-    // 2. 如果估值 API 没有确认是真实值，但时间已晚（收盘后），尝试检查历史数据（近10日）看是否有今日的真实净值
+    // 2. [Fix] 安全的数据校验逻辑
     if (data) {
-      // 简单的判断：如果估值时间已经是 15:00 或更晚，或者 API 里的日期不对，尝试校验
-      // 注意：这里我们做个宽松检查，只要拿到了 data 就去检查 pingzhongdata，确保数据准确（特别是收盘后）
-      // 为减少请求，可以限制只有在收盘后才检查 (gztime 包含 15:00)
-      // 或者简单点：如果 !isReal，就去检查一下
       const isClosed = data.gztime && (data.gztime.includes('15:00') || data.gztime.includes('15:30') || parseInt(data.gztime.split(' ')[1]?.split(':')[0]) >= 15);
 
       if (isClosed && !data.isReal) {
@@ -802,29 +993,28 @@ export default function App() {
 
           if (match) {
             const list = JSON.parse(match[1]);
-            if (list && list.length > 0) {
+            // [Fix] 严格校验 list 是否为数组且非空
+            if (list && Array.isArray(list) && list.length > 0) {
               const last = list[list.length - 1];
-              const lastDate = new Date(last.x);
-              const lastDateStr = `${lastDate.getFullYear()}-${String(lastDate.getMonth() + 1).padStart(2, '0')}-${String(lastDate.getDate()).padStart(2, '0')}`;
+              // [Fix] 校验 last 对象及必要字段是否存在
+              if (last && typeof last.y !== 'undefined' && typeof last.equityReturn !== 'undefined') {
+                const lastDate = new Date(last.x);
+                const lastDateStr = `${lastDate.getFullYear()}-${String(lastDate.getMonth() + 1).padStart(2, '0')}-${String(lastDate.getDate()).padStart(2, '0')}`;
+                const gzDateStr = data.gztime.split(' ')[0];
 
-              // 获取 data.gztime 的日期部分，或者当前日期
-              // 这里我们假设如果 pingzhongdata 的最后一个日期比 data.jzrq 更晚，或者等于 data.gztime 的日期，那就是最新的
-              // 通常 data.gztime 是 "2023-10-27 15:00"，我们看 pingzhongdata 是否有 2023-10-27
-
-              const gzDateStr = data.gztime.split(' ')[0]; // "2023-10-27"
-
-              if (lastDateStr === gzDateStr) {
-                // 找到了今天的真实数据的记录
-                data.isReal = true;
-                data.dwjz = last.y;          // 真实净值
-                data.gszzl = last.equityReturn; // 真实涨跌幅
-                data.gsz = last.y;           // 更新估算值为真实值，方便因为 gsz 计算逻辑
-                data.jzrq = lastDateStr;     // 更新净值日期
+                if (lastDateStr === gzDateStr) {
+                  data.isReal = true;
+                  // [Fix] 强制转换为 Float，防止字符串导致 toFixed 报错
+                  data.dwjz = parseFloat(last.y);
+                  data.gszzl = parseFloat(last.equityReturn);
+                  data.gsz = parseFloat(last.y);
+                  data.jzrq = lastDateStr;
+                }
               }
             }
           }
         } catch (e) {
-          // ignore error
+          // 忽略解析错误，保持原有 data 不变
         }
       }
     }
@@ -938,7 +1128,10 @@ export default function App() {
     if (!fund) return;
     setEditForm({
       id: fund.id,
-      investment: fund.investment,
+      // [New] 增加买卖操作类型和金额
+      actionType: 'buy',
+      actionAmount: '',
+
       planEnabled: fund.plan?.enabled || false,
       planAmount: fund.plan?.amount || '',
       planFreq: fund.plan?.freq || 'daily',
@@ -949,16 +1142,53 @@ export default function App() {
   };
 
   const handleEditFund = () => {
-    const updated = myHoldings.map(h => h.id === editForm.id ? {
-      ...h,
-      investment: parseFloat(editForm.investment),
-      plan: {
-        enabled: editForm.planEnabled,
-        amount: parseFloat(editForm.planAmount),
-        freq: editForm.planFreq,
-        days: editForm.planDays
+    const updated = myHoldings.map(h => {
+      if (h.id !== editForm.id) return h;
+
+      let newInvestment = parseFloat(h.investment);
+      let newShares = parseFloat(h.shares);
+
+      // 只有在修改持仓模式下才处理金额计算
+      if (editMode === 'holdings') {
+        const amount = parseFloat(editForm.actionAmount);
+
+        if (!isNaN(amount) && amount > 0) {
+          const live = realtimeData[h.code];
+          // 如果没有真实净值，则使用估值计算当前份额
+          const currentPrice = (live && (live.isReal || h.calcToday === false)) ? live.dwjz : (live?.gsz || 1);
+          const currentShares = newShares || (newInvestment / currentPrice);
+
+          if (editForm.actionType === 'buy') {
+            // 买入：直接累加本金，并按当前净值增加份额
+            newInvestment += amount;
+            newShares = currentShares + (amount / currentPrice);
+          } else if (editForm.actionType === 'sell') {
+            const currentVal = currentShares * currentPrice;
+            // 防止卖出超出当前总市值
+            const sellAmount = Math.min(amount, currentVal);
+            const sellShares = sellAmount / currentPrice;
+            const sellRatio = sellShares / currentShares;
+
+            // 卖出：扣除卖出份额，并按等同比例扣除持有本金（维持真实的收益率）
+            newShares = currentShares - sellShares;
+            newInvestment -= (newInvestment * sellRatio);
+          }
+        }
       }
-    } : h);
+
+      return {
+        ...h,
+        investment: newInvestment,
+        shares: newShares,
+        plan: {
+          enabled: editForm.planEnabled,
+          amount: parseFloat(editForm.planAmount),
+          freq: editForm.planFreq,
+          days: editForm.planDays
+        }
+      };
+    });
+
     setMyHoldings(updated);
     setShowEditModal(false);
     setNotification({ msg: '保存成功', type: 'success' });
@@ -1338,7 +1568,7 @@ export default function App() {
                                 <span className={`text-base font-black ${isUp ? COLORS.up : COLORS.down}`}>{formatPercent(live?.gszzl)}</span>
                                 {/* 增加估算涨幅小字 */}
                                 <p className={`text-[10px] ${live?.isReal ? 'text-blue-400' : 'text-slate-600'}`}>
-                                  {live?.isReal ? (lang === 'en' ? 'Actual' : '真实涨跌') : t('estimate')}
+                                  {live?.isReal ? t('actual_change') : t('estimate')}
                                 </p>
                               </div>
 
@@ -1408,7 +1638,7 @@ export default function App() {
               </section>
 
               <section className="space-y-4 pt-6 border-t border-white/10">
-                <h3 className="text-[9px] font-black text-rose-500 uppercase tracking-[0.2em] flex items-center gap-2"><Trash2 size={12} /> Danger Zone</h3>
+                <h3 className="text-[9px] font-black text-rose-500 uppercase tracking-[0.2em] flex items-center gap-2"><Trash2 size={12} />{t('danger_zone')}</h3>
                 <button
                   onClick={handleClearCache}
                   className="w-full p-4 bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-2xl font-black text-xs hover:bg-rose-500 hover:text-white transition-all flex items-center justify-between group"
@@ -1462,7 +1692,7 @@ export default function App() {
                           </span>
                           <div className="flex flex-col">
                             <span className={`text-[9px] font-black uppercase tracking-widest leading-none mb-1 ${live?.isReal ? 'text-blue-400' : 'text-slate-500'}`}>
-                              {live?.isReal ? (lang === 'en' ? 'Actual' : '真实涨跌') : t('estimate')}
+                              {live?.isReal ? t('actual_change') : t('estimate')}
                             </span>
                             <span className="text-[10px] text-slate-600 font-mono">{live?.gztime}</span>
                           </div>
@@ -1560,9 +1790,9 @@ export default function App() {
                     <Eye size={16} /> {t('watchlist')}
                   </h2>
                   <div className="flex gap-1 bg-white/5 p-1 rounded-lg">
-                    <button onClick={() => setWatchlistSort('default')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${watchlistSort === 'default' ? 'bg-white/10 text-white' : 'text-slate-500'}`}>默认</button>
-                    <button onClick={() => setWatchlistSort('asc')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${watchlistSort === 'asc' ? 'bg-white/10 text-white' : 'text-slate-500'}`}>涨幅↑</button>
-                    <button onClick={() => setWatchlistSort('desc')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${watchlistSort === 'desc' ? 'bg-white/10 text-white' : 'text-slate-500'}`}>涨幅↓</button>
+                    <button onClick={() => setWatchlistSort('default')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${watchlistSort === 'default' ? 'bg-white/10 text-white' : 'text-slate-500'}`}>{t('sort_default')}</button>
+                    <button onClick={() => setWatchlistSort('asc')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${watchlistSort === 'asc' ? 'bg-white/10 text-white' : 'text-slate-500'}`}>{t('sort_asc')}</button>
+                    <button onClick={() => setWatchlistSort('desc')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${watchlistSort === 'desc' ? 'bg-white/10 text-white' : 'text-slate-500'}`}>{t('sort_desc')}</button>
                   </div>
                 </div>
                 <button onClick={() => { setShowAddModal(true); setIsSearchingFund(false); setFoundFundName(null); setNewFund({ code: '', investment: '', return: '', calcToday: true }); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg transition-all font-bold text-[9px] uppercase tracking-widest"><Plus size={10} /> {t('addAsset')}</button>
@@ -1706,16 +1936,54 @@ export default function App() {
 
                       return filtered.map(item => {
                         const r = realtimeData[item.code];
+
+                        // 定义统一的删除函数，避免重复代码
+                        const handleDelete = (e) => {
+                          e.stopPropagation();
+                          setConfirmState({
+                            isOpen: true,
+                            title: '确认移除',
+                            msg: `确定要移除 ${item.name || item.code} 吗？`,
+                            onConfirm: () => {
+                              const newList = watchlist.filter(w => w.code !== item.code);
+                              setWatchlist(newList);
+                              if (window.require) {
+                                window.require('electron').ipcRenderer.invoke('db-delete-watchlist', item.code);
+                              }
+                              setConfirmState(prev => ({ ...prev, isOpen: false }));
+                            }
+                          });
+                        };
+
+                        // --- 情况 A: 数据还没加载出来 (骨架屏状态) ---
                         if (!r) {
                           return (
-                            <div key={item.code} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center justify-between animate-pulse">
-                              <div><div className="h-4 w-24 bg-white/10 rounded mb-2"></div><div className="h-3 w-16 bg-white/10 rounded"></div></div>
+                            <div key={item.code} className="bg-white/5 border border-white/10 rounded-2xl p-4 relative group animate-pulse">
+                              {/* 强制显示删除按钮，哪怕没数据 */}
+                              <button
+                                onClick={handleDelete}
+                                className="absolute top-3 right-3 text-slate-500 hover:text-rose-500 z-20"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                              <div className="pr-8">
+                                <div className="h-4 w-32 bg-white/10 rounded mb-2"></div>
+                                <div className="h-3 w-16 bg-white/5 rounded"></div>
+                              </div>
+                              <div className="mt-4 h-8 w-full bg-white/5 rounded-lg"></div>
                             </div>
                           );
                         }
+
+                        // --- 情况 B: 数据加载正常 (原有逻辑) ---
                         const rate = r.gszzl;
                         const isUp = rate >= 0;
                         const colorClass = isUp ? 'text-rose-500' : 'text-emerald-500';
+
+                        // [New] 获取今日的日期字符串以提取此基金的分时历史数据
+                        const todayDate = new Date();
+                        const todayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
+                        const fundHistory = historyData[item.code]?.[todayStr];
 
                         return (
                           <div
@@ -1733,22 +2001,7 @@ export default function App() {
                           >
                             <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity z-10 flex gap-2">
                               <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setConfirmState({
-                                    isOpen: true,
-                                    title: '确认移除',
-                                    msg: `确定要移除 ${item.name} 吗？`,
-                                    onConfirm: () => {
-                                      const newList = watchlist.filter(w => w.code !== item.code);
-                                      setWatchlist(newList);
-                                      if (window.require) {
-                                        window.require('electron').ipcRenderer.invoke('db-delete-watchlist', item.code);
-                                      }
-                                      setConfirmState(prev => ({ ...prev, isOpen: false }));
-                                    }
-                                  });
-                                }}
+                                onClick={handleDelete}
                                 className="text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 p-1.5 rounded-lg transition-colors"
                               >
                                 <Trash2 size={14} />
@@ -1760,6 +2013,11 @@ export default function App() {
                                 <h3 className="font-bold text-slate-200 text-sm leading-tight mb-1 line-clamp-2" title={item.name}>{item.name}</h3>
                                 <span className="text-[10px] text-slate-500 font-mono tracking-wider">{item.code}</span>
                               </div>
+                            </div>
+
+                            {/* [New] 插入迷你分时走势图 */}
+                            <div className="h-10 w-full mb-2 mx-auto opacity-80 mix-blend-screen pointer-events-none">
+                              <MiniIntradayChart data={fundHistory} isUp={isUp} />
                             </div>
 
                             <div className="flex items-end justify-between font-money mt-auto">
@@ -1775,7 +2033,7 @@ export default function App() {
                                   <AnimatedNumber value={rate} formatFn={v => (v > 0 ? '+' : '') + v + '%'} />
                                 </div>
                                 <span className={`text-[9px] font-black uppercase tracking-wider mt-1 ${r?.isReal ? 'text-blue-400' : 'text-slate-600'}`}>
-                                  {r?.isReal ? (lang === 'en' ? 'ACTUAL' : '真实涨跌') : (lang === 'en' ? 'ESTIMATE' : '实时估值')}
+                                  {r?.isReal ? t('actual_change') : t('estimate')}
                                 </span>
                               </div>
                             </div>
@@ -1816,14 +2074,14 @@ export default function App() {
                 className="w-full text-left px-4 py-2 hover:bg-white/10 text-xs text-white font-bold flex items-center gap-2"
               >
                 <Plus size={14} />
-                <span>添加到持仓</span>
+                <span>{t('add_to_portfolio')}</span>
               </button>
             )}
 
             {contextMenu.type === 'portfolio' && (
               <div className="py-1">
                 <div className="px-4 py-1.5 text-[10px] uppercase font-black text-slate-500 tracking-widest border-b border-white/5 mb-1 bg-black/20">
-                  移动到...
+                  {t('move_to')}
                 </div>
                 {portfolios.map(p => (
                   <button
@@ -1843,7 +2101,7 @@ export default function App() {
                       );
                       setMyHoldings(updatedHoldings);
                       setContextMenu(null);
-                      setNotification({ msg: `已移动到 "${p.name}"`, type: 'success' });
+                      setNotification({ msg: `${t('moved_to')} "${p.name}"`, type: 'success' });
                       setTimeout(() => setNotification(null), 2000);
 
                       if (window.require) {
@@ -1872,13 +2130,13 @@ export default function App() {
             <div className="absolute inset-0 bg-black/90 backdrop-blur-xl animate-fade-in" onClick={() => setShowWatchlistGroupModal(false)} />
             <div className="bg-[#0a0a0a] border border-white/10 w-full max-w-xs rounded-3xl shadow-2xl p-6 relative animate-modal-scale z-10">
               <h2 className="text-base font-black text-white mb-6 uppercase tracking-widest text-center">
-                {watchlistGroupAction.type === 'create' ? '新建自选板块' : '重命名板块'}
+                {watchlistGroupAction.type === 'create' ? t('create_group') : t('rename_group')}
               </h2>
               <input
                 type="text"
                 value={watchlistGroupAction.name}
                 onChange={e => setWatchlistGroupAction({ ...watchlistGroupAction, name: e.target.value })}
-                placeholder="板块名称"
+                placeholder={t('group_name')}
                 autoFocus
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-bold text-center outline-none focus:border-white/40 mb-6"
                 onKeyDown={(e) => { if (e.key === 'Enter') handleWatchlistGroupAction(); }}
@@ -2025,21 +2283,50 @@ export default function App() {
                 </div>
                 <div className="space-y-6">
                   {editMode === 'holdings' ? (
-                    <div className="space-y-2">
-                      <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">投入总额 (¥)</label>
-                      <input type="number" value={editForm.investment} onChange={e => setEditForm({ ...editForm, investment: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-bold font-money outline-none focus:border-white/40" />
+                    <div className="space-y-4">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setEditForm({ ...editForm, actionType: 'buy' })}
+                          className={`flex-1 py-2 rounded-xl text-xs font-black transition-all border ${editForm.actionType === 'buy' ? 'bg-rose-500/20 text-rose-500 border-rose-500/50' : 'bg-white/5 text-slate-500 border-white/10'}`}
+                        >
+                          {t('buy')}
+                        </button>
+                        <button
+                          onClick={() => setEditForm({ ...editForm, actionType: 'sell' })}
+                          className={`flex-1 py-2 rounded-xl text-xs font-black transition-all border ${editForm.actionType === 'sell' ? 'bg-emerald-500/20 text-emerald-500 border-emerald-500/50' : 'bg-white/5 text-slate-500 border-white/10'}`}
+                        >
+                          {t('sell')}
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">
+                          {editForm.actionType === 'buy' ? '买入金额 (¥)' : '卖出金额 (¥)'}
+                        </label>
+                        <input
+                          type="number"
+                          value={editForm.actionAmount}
+                          onChange={e => setEditForm({ ...editForm, actionAmount: e.target.value })}
+                          placeholder="请输入交易金额"
+                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-bold font-money outline-none focus:border-white/40 placeholder:text-slate-700"
+                        />
+                        {editForm.actionType === 'sell' && (
+                          <p className="text-[9px] text-slate-500 ml-1 mt-1 font-normal tracking-wide">
+                            {t('buyingTip')}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <div className="space-y-6">
                       <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
-                        <span className="text-xs font-bold text-slate-300">启用定投计划</span>
+                        <span className="text-xs font-bold text-slate-300">{t('enable_plan')}</span>
                         <button onClick={() => setEditForm({ ...editForm, planEnabled: !editForm.planEnabled })} className={`w-10 h-5 rounded-full transition-all relative ${editForm.planEnabled ? 'bg-rose-500' : 'bg-slate-700'}`}>
                           <div className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 transition-all ${editForm.planEnabled ? 'left-6' : 'left-0.5'}`} />
                         </button>
                       </div>
                       {editForm.planEnabled && (
                         <div className="space-y-4 animate-fade-in">
-                          <input type="number" value={editForm.planAmount} onChange={e => setEditForm({ ...editForm, planAmount: e.target.value })} placeholder="每期金额" className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-bold" />
+                          <input type="number" value={editForm.planAmount} onChange={e => setEditForm({ ...editForm, planAmount: e.target.value })} placeholder={t('plan_amount_placeholder')} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-bold" />
                           <div className="flex gap-2">
                             {['daily', 'weekly'].map(f => (
                               <button key={f} onClick={() => setEditForm({ ...editForm, planFreq: f })} className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase border transition-all ${editForm.planFreq === f ? 'bg-white text-black border-white' : 'bg-white/5 border-white/10 text-slate-500'}`}>{t(f)}</button>
