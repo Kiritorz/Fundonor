@@ -115,7 +115,15 @@ const LANGUAGES = {
     no_watchlist_data: '暂无自选基金',
     add_to_portfolio: '添加到持仓',
     moved_to: '已移动到',
-    danger_zone: '存储配置'
+    danger_zone: '存储配置',
+    dataManagement: '数据管理',
+    importData: '数据导入',
+    importFromFile: '从文件导入',
+    pasteBackupString: '粘贴备份字符串在此...',
+    exportData: '数据导出',
+    exportAllJson: '导出全量 JSON 文件',
+    copyBackupString: '复制备份字符串',
+    backupStringCopied: '已复制加密长字符串',
   },
   en: {
     portfolio: 'Portfolio',
@@ -219,6 +227,14 @@ const LANGUAGES = {
     add_to_portfolio: 'Add to Portfolio',
     moved_to: 'Moved to',
     danger_zone: 'Danger Zone',
+    dataManagement: 'Data Management',
+    importData: 'Import Data',
+    importFromFile: 'Import from File',
+    pasteBackupString: 'Paste backup string here...',
+    exportData: 'Export Data',
+    exportAllJson: 'Export Full JSON',
+    copyBackupString: 'Copy Backup String',
+    backupStringCopied: 'Backup string copied',
   }
 };
 
@@ -1709,56 +1725,41 @@ export default function App() {
                 </div>
               </section>
 
-              <section className="space-y-4 pt-6 border-t border-white/10">
-                <h3 className="text-[9px] font-black text-rose-500 uppercase tracking-[0.2em] flex items-center gap-2"><Trash2 size={12} />{t('danger_zone')}</h3>
-                <button
-                  onClick={handleClearCache}
-                  className="w-full p-4 bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-2xl font-black text-xs hover:bg-rose-500 hover:text-white transition-all flex items-center justify-between group"
-                >
-                  <div className="text-left">
-                    <p>{t('clearCache')}</p>
-                    <p className="text-[9px] font-normal opacity-60 mt-0.5 uppercase tracking-widest">{t('cacheNote')}</p>
-                  </div>
-                  <ShieldAlert size={18} className="opacity-40 group-hover:opacity-100" />
-                </button>
-              </section>
-
-              {/* 在 Settings 视图中添加 */}
-              <div className="space-y-4 mb-8">
-                <h3 className="text-sm font-bold text-slate-400 flex items-center gap-2">
-                  <Database size={16} /> 数据管理 / Data Management
+              <section className="space-y-4">
+                <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] flex items-center gap-2">
+                  <Database size={12} /> {t('dataManagement')}
                 </h3>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* 导出区域 */}
                   <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-                    <div className="text-xs font-bold text-white mb-3">备份与导出</div>
+                    <div className="text-xs font-bold text-white mb-3">{t('exportData')}</div>
                     <div className="flex flex-wrap gap-2">
                       <button
                         onClick={() => downloadExportFile('all')}
                         className="flex items-center gap-2 px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded-xl text-xs transition-all"
                       >
-                        <Download size={14} /> 导出全量 JSON 文件
+                        <Download size={14} /> {t('exportAllJson')}
                       </button>
                       <button
                         onClick={() => {
                           const { base64Str } = handleExport('all');
                           navigator.clipboard.writeText(base64Str);
-                          setNotification({ type: 'success', msg: '已复制加密长字符串' });
+                          setNotification({ type: 'success', msg: t('backupStringCopied') });
                         }}
                         className="flex items-center gap-2 px-3 py-2 bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 rounded-xl text-xs transition-all"
                       >
-                        <Copy size={14} /> 复制备份字符串
+                        <Copy size={14} /> {t('copyBackupString')}
                       </button>
                     </div>
                   </div>
 
                   {/* 导入区域 */}
                   <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-                    <div className="text-xs font-bold text-white mb-3">恢复与导入</div>
+                    <div className="text-xs font-bold text-white mb-3">{t('importData')}</div>
                     <div className="flex flex-col gap-3">
                       <label className="flex items-center gap-2 px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-xl text-xs cursor-pointer transition-all w-fit">
-                        <Upload size={14} /> 选择 JSON 文件
+                        <Upload size={14} /> {t('importFromFile')}
                         <input
                           type="file"
                           className="hidden"
@@ -1776,7 +1777,7 @@ export default function App() {
                       <div className="relative">
                         <input
                           type="text"
-                          placeholder="粘贴备份字符串在此..."
+                          placeholder={t('pasteBackupString')}
                           className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-[10px] text-slate-300 focus:outline-none focus:border-emerald-500/50"
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && e.target.value) {
@@ -1789,7 +1790,23 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-              </div>
+              </section>
+
+              <section className="space-y-4 pt-6 border-t border-white/10">
+                <h3 className="text-[9px] font-black text-rose-500 uppercase tracking-[0.2em] flex items-center gap-2">
+                  <Trash2 size={12} />{t('danger_zone')}
+                </h3>
+                <button
+                  onClick={handleClearCache}
+                  className="w-full p-4 bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-2xl font-black text-xs hover:bg-rose-500 hover:text-white transition-all flex items-center justify-between group"
+                >
+                  <div className="text-left">
+                    <p>{t('clearCache')}</p>
+                    <p className="text-[9px] font-normal opacity-60 mt-0.5 uppercase tracking-widest">{t('cacheNote')}</p>
+                  </div>
+                  <ShieldAlert size={18} className="opacity-40 group-hover:opacity-100" />
+                </button>
+              </section>
             </div>
           </div>
 
