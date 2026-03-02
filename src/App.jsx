@@ -6,7 +6,8 @@ import {
   Search, Settings, Calendar, Coins, Globe,
   CheckCircle, AlertCircle, LayoutGrid, FolderOpen,
   AudioLines, LineChart as LucideLineChart, History, PieChart, Layers, ArrowUpRight, ArrowDownRight,
-  Languages, Edit3, Repeat, PencilLine, Check, ChevronUp, ChevronDown, HelpCircle, ToggleLeft, ToggleRight, Eye, Star
+  Languages, Edit3, Repeat, PencilLine, Check, ChevronUp, ChevronDown, HelpCircle, ToggleLeft, ToggleRight, Eye, Star,
+  Database, Download, Upload, Copy, FileJson, FileText, ClipboardCheck
 } from 'lucide-react';
 
 import logoIcon from './assets/icon-outline.png';
@@ -1326,6 +1327,77 @@ export default function App() {
     }
   };
 
+  // --- 数据导入导出逻辑 ---
+
+  // 1. 导出数据
+  const handleExport = (type = 'all') => {
+    const exportData = {
+      version: '1.0',
+      timestamp: Date.now(),
+      // 根据类型决定导出的内容
+      holdings: (type === 'all' || type === 'portfolio') ? myHoldings : [],
+      portfolios: (type === 'all' || type === 'portfolio') ? portfolios : [],
+      watchlist: (type === 'all' || type === 'watchlist') ? watchlist : [],
+      watchlistGroups: (type === 'all' || type === 'watchlist') ? watchlistGroups : [],
+    };
+
+    const jsonStr = JSON.stringify(exportData);
+    const base64Str = btoa(encodeURIComponent(jsonStr)); // 转为长字符串
+
+    return { jsonStr, base64Str };
+  };
+
+  // 2. 导出为文件
+  const downloadExportFile = (type) => {
+    const { jsonStr } = handleExport(type);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `fund_backup_${type}_${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setNotification({ type: 'success', msg: '导出文件成功' });
+  };
+
+  // 3. 导入数据逻辑
+  const handleImport = async (inputStr) => {
+    try {
+      let rawData = '';
+      // 判断是 Base64 还是纯 JSON
+      if (inputStr.trim().startsWith('{')) {
+        rawData = inputStr;
+      } else {
+        rawData = decodeURIComponent(atob(inputStr));
+      }
+
+      const data = JSON.parse(rawData);
+
+      // 基础校验
+      if (!data.holdings && !data.watchlist) throw new Error('无效的数据格式');
+
+      // 更新状态（这里采用增量合并策略）
+      if (data.holdings?.length > 0) {
+        setMyHoldings(prev => [...prev, ...data.holdings.filter(h => !prev.find(p => p.id === h.id))]);
+      }
+      if (data.portfolios?.length > 0) {
+        setPortfolios(prev => [...prev, ...data.portfolios.filter(p => !prev.find(pp => pp.id === p.id))]);
+      }
+      if (data.watchlist?.length > 0) {
+        setWatchlist(prev => [...prev, ...data.watchlist.filter(w => !prev.find(pw => pw.code === w.code))]);
+      }
+      if (data.watchlistGroups?.length > 0) {
+        setWatchlistGroups(prev => [...prev, ...data.watchlistGroups.filter(g => !prev.find(pg => pg.id === g.id))]);
+      }
+
+      setNotification({ type: 'success', msg: '导入成功，数据已合并' });
+      // 触发保存到数据库 (假设你已经有了同步函数)
+      // syncToDB(); 
+    } catch (e) {
+      console.error(e);
+      setNotification({ type: 'error', msg: '导入失败：数据格式错误' });
+    }
+  };
 
   // --- 数据持久化 ---
   useEffect(() => {
@@ -1650,6 +1722,74 @@ export default function App() {
                   <ShieldAlert size={18} className="opacity-40 group-hover:opacity-100" />
                 </button>
               </section>
+
+              {/* 在 Settings 视图中添加 */}
+              <div className="space-y-4 mb-8">
+                <h3 className="text-sm font-bold text-slate-400 flex items-center gap-2">
+                  <Database size={16} /> 数据管理 / Data Management
+                </h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* 导出区域 */}
+                  <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <div className="text-xs font-bold text-white mb-3">备份与导出</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => downloadExportFile('all')}
+                        className="flex items-center gap-2 px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded-xl text-xs transition-all"
+                      >
+                        <Download size={14} /> 导出全量 JSON 文件
+                      </button>
+                      <button
+                        onClick={() => {
+                          const { base64Str } = handleExport('all');
+                          navigator.clipboard.writeText(base64Str);
+                          setNotification({ type: 'success', msg: '已复制加密长字符串' });
+                        }}
+                        className="flex items-center gap-2 px-3 py-2 bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 rounded-xl text-xs transition-all"
+                      >
+                        <Copy size={14} /> 复制备份字符串
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 导入区域 */}
+                  <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <div className="text-xs font-bold text-white mb-3">恢复与导入</div>
+                    <div className="flex flex-col gap-3">
+                      <label className="flex items-center gap-2 px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-xl text-xs cursor-pointer transition-all w-fit">
+                        <Upload size={14} /> 选择 JSON 文件
+                        <input
+                          type="file"
+                          className="hidden"
+                          accept=".json"
+                          onChange={(e) => {
+                            const file = e.target.files[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onload = (ev) => handleImport(ev.target.result);
+                              reader.readAsText(file);
+                            }
+                          }}
+                        />
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="粘贴备份字符串在此..."
+                          className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-[10px] text-slate-300 focus:outline-none focus:border-emerald-500/50"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && e.target.value) {
+                              handleImport(e.target.value);
+                              e.target.value = '';
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
